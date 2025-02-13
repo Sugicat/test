@@ -1,76 +1,115 @@
-# test
-
-import re
+'''py
 import yaml
+import re
 from pathlib import Path
-from typing import Dict, Any
+import logging
+
+# ロギングの設定
+logging.basicConfig(level=logging.DEBUG, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class PerlConfigConverter:
-    """Perlの設定ファイルをYAMLに変換するコンバーター"""
-
     def __init__(self, input_dir: str, output_dir: str):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
+        logger.info(f"Input directory: {self.input_dir.absolute()}")
+        logger.info(f"Output directory: {self.output_dir.absolute()}")
+        
+        # 出力ディレクトリの作成
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _parse_perl_variable(self, line: str) -> tuple[Optional[str], Any]:
+    def _parse_perl_variable(self, line: str):
         """Perl変数の行をパースする"""
+        logger.debug(f"Parsing line: {line}")
+        
         # スカラー変数のパース
         scalar_match = re.match(r'\$(\w+)\s*=\s*[\'"]?(.*?)[\'"]?\s*;', line)
         if scalar_match:
-            return scalar_match.group(1), scalar_match.group(2)
+            name, value = scalar_match.group(1), scalar_match.group(2)
+            logger.debug(f"Parsed scalar: {name} = {value}")
+            return name, value
 
         # 配列のパース
         array_match = re.match(r'@(\w+)\s*=\s*\((.*?)\);', line)
         if array_match:
-            values = [v.strip(' \'\"') for v in array_match.group(2).split(',')]
-            return array_match.group(1), values
+            name = array_match.group(1)
+            values = [v.strip(' \'"') for v in array_match.group(2).split(',')]
+            logger.debug(f"Parsed array: {name} = {values}")
+            return name, values
 
         # ハッシュのパース
         hash_match = re.match(r'%(\w+)\s*=\s*\((.*?)\);', line)
         if hash_match:
-            pairs = [p.strip(' \'\"') for p in hash_match.group(2).split(',')]
+            name = hash_match.group(1)
+            pairs = [p.strip(' \'"') for p in hash_match.group(2).split(',')]
             hash_dict = {}
             for i in range(0, len(pairs), 2):
                 if i + 1 < len(pairs):
                     hash_dict[pairs[i]] = pairs[i + 1]
-            return hash_match.group(1), hash_dict
+            logger.debug(f"Parsed hash: {name} = {hash_dict}")
+            return name, hash_dict
 
+        logger.debug("No match found for line")
         return None, None
 
-    def convert_file(self, perl_file: Path) -> Dict[str, Any]:
+    def convert_file(self, perl_file: Path):
         """Perlファイルを解析してディクショナリに変換する"""
+        logger.info(f"Converting file: {perl_file}")
         config_dict = {}
         current_product = None
 
-        with perl_file.open('r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
+        try:
+            with perl_file.open('r', encoding='utf-8') as f:
+                content = f.read()
+                logger.debug(f"File content:\n{content}")
                 
-                # 製品セクションの開始を検出
-                if line.startswith('# Product:'):
-                    current_product = line.split(':')[1].strip()
-                    config_dict[current_product] = {}
-                    continue
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#') and not 'Product:' in line:
+                        continue
 
-                # 変数定義の解析
-                name, value = self._parse_perl_variable(line)
-                if name and current_product:
-                    config_dict[current_product][name] = value
+                    if 'Product:' in line:
+                        current_product = line.split('Product:')[1].strip()
+                        logger.info(f"Found product: {current_product}")
+                        config_dict[current_product] = {}
+                        continue
 
-        return config_dict
+                    name, value = self._parse_perl_variable(line)
+                    if name and current_product:
+                        logger.debug(f"Adding to config: {current_product}.{name} = {value}")
+                        config_dict[current_product][name] = value
+
+            logger.info(f"Conversion result: {config_dict}")
+            return config_dict
+
+        except Exception as e:
+            logger.error(f"Error converting file: {e}", exc_info=True)
+            raise
 
     def convert_all_files(self):
         """全てのPerlファイルを変換する"""
-        for perl_file in self.input_dir.glob('*.pl'):
-            config_dict = self.convert_file(perl_file)
-            
-            # YAMLファイルとして出力
-            yaml_file = self.output_dir / f"{perl_file.stem}.yml"
-            with yaml_file.open('w', encoding='utf-8') as f:
-                yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False)
+        logger.info("Starting conversion of all files")
+        
+        perl_files = list(self.input_dir.glob('*.pl'))
+        logger.info(f"Found Perl files: {perl_files}")
+        
+        for perl_file in perl_files:
+            try:
+                config_dict = self.convert_file(perl_file)
+                yaml_file = self.output_dir / f"{perl_file.stem}.yml"
+                
+                logger.info(f"Writing to YAML file: {yaml_file}")
+                with yaml_file.open('w', encoding='utf-8') as f:
+                    yaml.dump(config_dict, f, allow_unicode=True, default_flow_style=False)
+                logger.info(f"Successfully converted {perl_file} to {yaml_file}")
+                
+            except Exception as e:
+                logger.error(f"Error processing file {perl_file}: {e}", exc_info=True)
 
-# 使用例
 if __name__ == "__main__":
-    converter = PerlConfigConverter("./perl_configs", "./yaml_configs")
+    print("Current working directory:", Path.cwd())
+    
+    converter = PerlConfigConverter("perl_configs", "yaml_configs")
     converter.convert_all_files()
+'''
