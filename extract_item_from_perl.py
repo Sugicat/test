@@ -32,13 +32,13 @@ def extract_test_info(perl_file_path, output_csv_path):
     for match in matches:
         test_block = match.group(0)
         
-        # 各項目を抽出
-        test_no = extract_field(test_block, r'# Test no\s*:(.*?)(?=#|\n|$)')
-        item1 = extract_field(test_block, r'# Item1\s*:(.*?)(?=#|\n|$)')
-        item2 = extract_field(test_block, r'# Item2\s*:(.*?)(?=#|\n|$)')
-        test_sequence = extract_field(test_block, r'# Test Sequence\s*:(.*?)(?=#|\n|$)')
-        input_parameter = extract_field(test_block, r'# Input Parameter\s*:(.*?)(?=#|\n|$)')
-        test_purpose = extract_field(test_block, r'# Test Purpose\s*:(.*?)(?=#|\n|$)')
+        # 各項目を抽出（フィールド名を指定）
+        test_no = extract_field(test_block, "Test no")
+        item1 = extract_field(test_block, "Item1")
+        item2 = extract_field(test_block, "Item2")
+        test_sequence = extract_field(test_block, "Test Sequence")
+        input_parameter = extract_field(test_block, "Input Parameter")
+        test_purpose = extract_field(test_block, "Test Purpose")
         
         # 抽出した情報を辞書としてリストに追加
         test_info = {
@@ -65,22 +65,58 @@ def extract_test_info(perl_file_path, output_csv_path):
     else:
         print("テスト情報が見つかりませんでした。")
 
-def extract_field(text, pattern):
+def extract_field(text, field_name):
     """
     テキストから特定のフィールドを抽出する補助関数
+    複数行にわたるフィールドにも対応
     
     Args:
         text (str): 検索対象のテキスト
-        pattern (str): 抽出するための正規表現パターン
+        field_name (str): 抽出するフィールド名（例: "Test no"）
     
     Returns:
-        str: 抽出された値（空白除去済み）
+        str: 抽出された値（整形済み）
     """
-    match = re.search(pattern, text)
-    if match:
-        # 空白を除去して返す
-        return match.group(1).strip()
-    return ""
+    # 各フィールドの開始パターン
+    field_patterns = [
+        "# Test no", "# Item1", "# Item2", "# Test Sequence", 
+        "# Input Parameter", "# Test Purpose"
+    ]
+    
+    # 指定されたフィールドの開始位置を検索
+    field_pattern = f"# {field_name}"
+    start_match = re.search(f"{field_pattern}\\s*:", text)
+    
+    if not start_match:
+        return ""
+    
+    start_pos = start_match.end()
+    
+    # 次のフィールドの開始位置を検索
+    end_pos = len(text)
+    for pattern in field_patterns:
+        # 指定されたフィールド以降で次のフィールドを検索
+        next_field_match = re.search(f"(?m)^{pattern}\\s*:", text[start_pos:])
+        if next_field_match:
+            next_field_pos = start_pos + next_field_match.start()
+            if next_field_pos < end_pos:
+                end_pos = next_field_pos
+    
+    # フィールドの内容を取得
+    field_content = text[start_pos:end_pos].strip()
+    
+    # 複数行の場合、各行から先頭の '#' と余分な空白を除去
+    lines = field_content.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        # 行頭の '#' と空白を除去
+        line = re.sub(r'^#\s*', '', line.strip())
+        if line:  # 空行でなければ追加
+            processed_lines.append(line)
+    
+    # 処理した行を結合
+    return ' '.join(processed_lines)
 
 if __name__ == "__main__":
     # コマンドライン引数からファイルパスを取得
