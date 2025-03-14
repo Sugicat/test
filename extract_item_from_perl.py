@@ -72,7 +72,7 @@ def extract_test_info(perl_file_path, output_csv_path):
     
     # CSVファイルに書き出し
     if test_info_list:
-        fieldnames = ['Test No', 'Item1', 'Item2', 'Test Sequence', 'Input Parameter', 'Test Purpose']
+        fieldnames = ['Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
         
         with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -87,6 +87,7 @@ def extract_field(text, field_name):
     """
     テキストから特定のフィールドを抽出する補助関数
     複数行にわたるフィールドにも対応
+    # ****** パターンがあればそこで終了
     
     Args:
         text (str): 検索対象のテキスト
@@ -97,9 +98,12 @@ def extract_field(text, field_name):
     """
     # 各フィールドの開始パターン (より柔軟なパターンに)
     field_patterns = [
-        r"#\s*Test no\s*:", r"#\s*Item1\s*:", r"#\s*Item2\s*:", 
+        r"#\s*Test no\s*:", r"#\s*Item1\s*:", r"#\s*Item2\s*:", r"#\s*Item3\s*:",
         r"#\s*Test Sequence\s*:", r"#\s*Input Parameter\s*:", r"#\s*Test Purpose\s*:"
     ]
+    
+    # 区切りパターン
+    delimiter_pattern = r"#\s*\*{6,}"
     
     # 指定されたフィールドのパターンを作成 (より柔軟なマッチングのため)
     field_pattern = rf"#\s*{field_name}\s*:"
@@ -113,17 +117,25 @@ def extract_field(text, field_name):
     
     start_pos = start_match.end()
     
-    # 次のフィールドの開始位置を検索
+    # 次のフィールドの開始位置または区切りパターンの開始位置を検索
     end_pos = len(text)
     
     # 全てのフィールドパターンに対して次の出現位置を探す
     for pattern in field_patterns:
-        # より柔軟な検索パターン (行頭にこだわらない)
+        # より柔軟な検索パターン
         next_field_match = re.search(pattern, text[start_pos:], re.IGNORECASE)
         if next_field_match:
             next_field_pos = start_pos + next_field_match.start()
             if next_field_pos < end_pos:
                 end_pos = next_field_pos
+    
+    # 区切りパターンを検索
+    delimiter_match = re.search(delimiter_pattern, text[start_pos:])
+    if delimiter_match:
+        delimiter_pos = start_pos + delimiter_match.start()
+        if delimiter_pos < end_pos:
+            end_pos = delimiter_pos
+            print(f"フィールド '{field_name}' の終了を区切りパターン '# ******' で検出しました")
     
     # フィールドの内容を取得
     field_content = text[start_pos:end_pos].strip()
