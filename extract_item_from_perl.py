@@ -187,6 +187,9 @@ def process_directory(directory_path, output_csv_path):
     # 結果を格納するリスト
     all_test_info = []
     
+    # 失敗したファイルのリスト
+    failed_files = []
+    
     # .vec ファイルの一覧を取得
     vec_files = list(Path(directory_path).glob('**/*.vec'))
     
@@ -228,10 +231,22 @@ def process_directory(directory_path, output_csv_path):
                 total_records += len(test_info_list)
                 success_count += 1
             else:
+                # 情報が抽出されなかった場合は失敗としてカウント
                 failed_count += 1
+                failed_files.append({
+                    'File Path': str(file_path),
+                    'Error': '抽出可能なテスト情報が見つかりませんでした',
+                    'Timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                })
         except Exception as e:
-            print(f"エラー: ファイル '{file_path}' の処理中に例外が発生しました: {str(e)}")
+            error_msg = str(e)
+            print(f"エラー: ファイル '{file_path}' の処理中に例外が発生しました: {error_msg}")
             failed_count += 1
+            failed_files.append({
+                'File Path': str(file_path),
+                'Error': error_msg,
+                'Timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            })
     
     # メモリ最適化のために大きなリストを直接CSVに書き出す
     if all_test_info:
@@ -247,18 +262,41 @@ def process_directory(directory_path, output_csv_path):
                 for i in range(0, len(all_test_info), batch_size):
                     writer.writerows(all_test_info[i:i+batch_size])
             
-            total_time = time.time() - start_time
             print(f"\n抽出完了: 合計 {len(all_test_info)} 件のテスト情報を '{output_csv_path}' に保存しました。")
-            print(f"処理サマリー:")
-            print(f"  - 処理ファイル数: {len(vec_files)} ファイル")
-            print(f"  - 成功: {success_count} ファイル")
-            print(f"  - 失敗/スキップ: {failed_count} ファイル")
-            print(f"  - 抽出レコード数: {total_records} レコード")
-            print(f"  - 処理時間: {total_time:.1f}秒 (平均: {total_time/len(vec_files):.3f}秒/ファイル)")
         except Exception as e:
             print(f"\nエラー: CSVファイルの書き込み中に例外が発生しました: {str(e)}")
     else:
         print("\nテスト情報が見つかりませんでした。")
+    
+    # 失敗したファイル一覧をCSVに出力
+    if failed_files:
+        # 失敗リスト用のCSVファイル名を生成
+        failed_csv_path = os.path.splitext(output_csv_path)[0] + "_failed.csv"
+        
+        try:
+            with open(failed_csv_path, 'w', newline='', encoding='shift_jis', errors='replace') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=['File Path', 'Error', 'Timestamp'])
+                writer.writeheader()
+                writer.writerows(failed_files)
+            
+            print(f"失敗したファイル一覧: 合計 {len(failed_files)} 件を '{failed_csv_path}' に保存しました。")
+        except Exception as e:
+            print(f"エラー: 失敗リストのCSV出力中に例外が発生しました: {str(e)}")
+            # 最低限の情報だけでも表示
+            print("\n=== 失敗したファイル一覧 ===")
+            for i, failed in enumerate(failed_files[:10]):  # 最初の10件だけ表示
+                print(f"{i+1}. {failed['File Path']} - {failed['Error']}")
+            if len(failed_files) > 10:
+                print(f"... 他 {len(failed_files) - 10} 件")
+    
+    # 処理サマリーを表示
+    total_time = time.time() - start_time
+    print(f"\n処理サマリー:")
+    print(f"  - 処理ファイル数: {len(vec_files)} ファイル")
+    print(f"  - 成功: {success_count} ファイル")
+    print(f"  - 失敗/スキップ: {failed_count} ファイル")
+    print(f"  - 抽出レコード数: {total_records} レコード")
+    print(f"  - 処理時間: {total_time:.1f}秒 (平均: {total_time/len(vec_files):.3f}秒/ファイル)")
 
 def scan_for_fields(file_path):
     """
