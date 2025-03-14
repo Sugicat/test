@@ -4,6 +4,7 @@ import os
 import sys
 import glob
 from pathlib import Path
+import time  # パフォーマンス計測用
 
 def extract_field(text, field_name, debug=True):
     """
@@ -19,20 +20,15 @@ def extract_field(text, field_name, debug=True):
     Returns:
         str: 抽出された値（整形済み）
     """
-    # 各フィールドの開始パターン (より柔軟なパターンに)
-    field_patterns = [
-        r"#\s*Test no\s*:", r"#\s*Item1\s*:", r"#\s*Item2\s*:", r"#\s*Item3\s*:",
-        r"#\s*Test Sequence\s*:", r"#\s*Input Parameter\s*:", r"#\s*Test Purpose\s*:"
-    ]
-    
-    # 区切りパターン
-    delimiter_pattern = r"#\s*\*{6,}"
+    # 事前コンパイルされた正規表現パターン（グローバル定数）を使用
+    global FIELD_PATTERNS_COMPILED
+    global DELIMITER_PATTERN_COMPILED
     
     # 指定されたフィールドのパターンを作成 (より柔軟なマッチングのため)
-    field_pattern = rf"#\s*{field_name}\s*:"
+    field_pattern = re.compile(rf"#\s*{field_name}\s*:", re.IGNORECASE)
     
     # まず通常のケースでマッチを試みる
-    start_match = re.search(field_pattern, text, re.IGNORECASE)
+    start_match = field_pattern.search(text)
     
     if not start_match:
         if debug:
@@ -45,16 +41,16 @@ def extract_field(text, field_name, debug=True):
     end_pos = len(text)
     
     # 全てのフィールドパターンに対して次の出現位置を探す
-    for pattern in field_patterns:
+    for pattern in FIELD_PATTERNS_COMPILED:
         # より柔軟な検索パターン
-        next_field_match = re.search(pattern, text[start_pos:], re.IGNORECASE)
+        next_field_match = pattern.search(text[start_pos:])
         if next_field_match:
             next_field_pos = start_pos + next_field_match.start()
             if next_field_pos < end_pos:
                 end_pos = next_field_pos
     
     # 区切りパターンを検索
-    delimiter_match = re.search(delimiter_pattern, text[start_pos:])
+    delimiter_match = DELIMITER_PATTERN_COMPILED.search(text[start_pos:])
     if delimiter_match:
         delimiter_pos = start_pos + delimiter_match.start()
         if delimiter_pos < end_pos:
@@ -118,10 +114,10 @@ def extract_test_info_from_file(file_path, debug=True):
         print(f"ファイルの先頭500文字: {content[:500].replace('\n', '\\n')}")
     
     # # ******** パターンで囲まれた部分を抽出
-    delimiter_pattern = r'#\s*\*{8,}'  # # に続いて空白（任意）、そして8個以上の * がある行
+    # 事前コンパイルされたパターンを使用
     
     # デリミタ（区切り）パターンの位置を見つける
-    delimiter_positions = [m.start() for m in re.finditer(delimiter_pattern, content)]
+    delimiter_positions = [m.start() for m in SECTION_DELIMITER_PATTERN_COMPILED.finditer(content)]
     if debug:
         print(f"見つかった区切りパターンの数: {len(delimiter_positions)}")
     
@@ -186,6 +182,8 @@ def process_directory(directory_path, output_csv_path):
         directory_path (str): 処理するディレクトリのパス
         output_csv_path (str): 出力するCSVファイルのパス
     """
+    start_time = time.time()  # 処理開始時間
+    
     # 結果を格納するリスト
     all_test_info = []
     
@@ -198,31 +196,67 @@ def process_directory(directory_path, output_csv_path):
     
     print(f"合計 {len(vec_files)} 個の .vec ファイルが見つかりました。")
     
+    # 処理成功・失敗のカウンター
+    success_count = 0
+    failed_count = 0
+    total_records = 0
+    
+    # バッチサイズ（何ファイルごとに進捗を表示するか）
+    batch_size = max(1, len(vec_files) // 20)  # 全体の5%ごとに表示
+    
     # 各ファイルを処理
     for i, file_path in enumerate(vec_files):
-        print(f"\n処理中 ({i+1}/{len(vec_files)}): {file_path}")
+        # 進捗表示（バッチごと）
+        if i % batch_size == 0 or i == len(vec_files) - 1:
+            progress = (i + 1) / len(vec_files) * 100
+            elapsed = time.time() - start_time
+            estimated_total = elapsed / (i + 1) * len(vec_files)
+            remaining = estimated_total - elapsed
+            print(f"進捗: {progress:.1f}% ({i+1}/{len(vec_files)}) 経過時間: {elapsed:.1f}秒 残り時間: {remaining:.1f}秒")
         
-        # ファイルからテスト情報を抽出 (詳細なデバッグ出力をオフに)
-        test_info_list = extract_test_info_from_file(str(file_path), debug=False)
-        
-        # ファイル名情報を追加
-        if test_info_list:
-            for info in test_info_list:
-                info['File Name'] = file_path.name
+        try:
+            # ファイルからテスト情報を抽出 (詳細なデバッグ出力をオフに)
+            test_info_list = extract_test_info_from_file(str(file_path), debug=False)
             
-            # 全体のリストに追加
-            all_test_info.extend(test_info_list)
+            # ファイル名情報を追加
+            if test_info_list:
+                for info in test_info_list:
+                    info['File Name'] = file_path.name
+                
+                # 全体のリストに追加
+                all_test_info.extend(test_info_list)
+                total_records += len(test_info_list)
+                success_count += 1
+            else:
+                failed_count += 1
+        except Exception as e:
+            print(f"エラー: ファイル '{file_path}' の処理中に例外が発生しました: {str(e)}")
+            failed_count += 1
     
-    # CSVファイルに書き出し
+    # メモリ最適化のために大きなリストを直接CSVに書き出す
     if all_test_info:
         fieldnames = ['File Name', 'Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
         
-        with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(all_test_info)
-        
-        print(f"\n抽出完了: 合計 {len(all_test_info)} 件のテスト情報を '{output_csv_path}' に保存しました。")
+        try:
+            with open(output_csv_path, 'w', newline='', encoding='shift_jis', errors='replace') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                # メモリ効率のために一度に書き込まずにバッチ処理
+                batch_size = 1000  # 一度に書き込むレコード数
+                for i in range(0, len(all_test_info), batch_size):
+                    writer.writerows(all_test_info[i:i+batch_size])
+            
+            total_time = time.time() - start_time
+            print(f"\n抽出完了: 合計 {len(all_test_info)} 件のテスト情報を '{output_csv_path}' に保存しました。")
+            print(f"処理サマリー:")
+            print(f"  - 処理ファイル数: {len(vec_files)} ファイル")
+            print(f"  - 成功: {success_count} ファイル")
+            print(f"  - 失敗/スキップ: {failed_count} ファイル")
+            print(f"  - 抽出レコード数: {total_records} レコード")
+            print(f"  - 処理時間: {total_time:.1f}秒 (平均: {total_time/len(vec_files):.3f}秒/ファイル)")
+        except Exception as e:
+            print(f"\nエラー: CSVファイルの書き込み中に例外が発生しました: {str(e)}")
     else:
         print("\nテスト情報が見つかりませんでした。")
 
@@ -242,8 +276,7 @@ def scan_for_fields(file_path):
             return
     
     # 区切りパターンを探す
-    delimiter_pattern = r'#\s*\*{8,}'
-    delimiter_matches = list(re.finditer(delimiter_pattern, content))
+    delimiter_matches = list(SECTION_DELIMITER_PATTERN_COMPILED.finditer(content))
     print(f"\n=== 区切りパターン '# ********' の検出結果 ===")
     print(f"合計: {len(delimiter_matches)}個見つかりました")
     if delimiter_matches:
@@ -275,6 +308,22 @@ def scan_for_fields(file_path):
                 context_end = min(len(content), m.end() + 40)
                 context = content[context_start:context_end].replace('\n', '\\n')
                 print(f"  サンプル{i+1}: ...{context}...")
+
+# グローバル変数として正規表現パターンを事前コンパイル
+# フィールドパターン
+FIELD_PATTERNS = [
+    r"#\s*Test no\s*:", r"#\s*Item1\s*:", r"#\s*Item2\s*:", r"#\s*Item3\s*:",
+    r"#\s*Test Sequence\s*:", r"#\s*Input Parameter\s*:", r"#\s*Test Purpose\s*:"
+]
+FIELD_PATTERNS_COMPILED = [re.compile(pattern, re.IGNORECASE) for pattern in FIELD_PATTERNS]
+
+# 区切りパターン
+DELIMITER_PATTERN = r"#\s*\*{6,}"  # 終了検出用（6個以上のアスタリスク）
+DELIMITER_PATTERN_COMPILED = re.compile(DELIMITER_PATTERN)
+
+# セクション区切りパターン
+SECTION_DELIMITER_PATTERN = r'#\s*\*{8,}'  # ブロック抽出用（8個以上のアスタリスク）
+SECTION_DELIMITER_PATTERN_COMPILED = re.compile(SECTION_DELIMITER_PATTERN)
 
 if __name__ == "__main__":
     # コマンドライン引数の処理
@@ -318,7 +367,7 @@ if __name__ == "__main__":
         if test_info_list:
             fieldnames = ['Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
             
-            with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            with open(output_csv_path, 'w', newline='', encoding='shift_jis', errors='replace') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(test_info_list)
