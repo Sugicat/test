@@ -23,14 +23,32 @@ def extract_test_info(perl_file_path, output_csv_path):
         with open(perl_file_path, 'r', encoding='shift-jis') as file:
             content = file.read()
     
-    # 正規表現パターンを定義（複数のテスト情報を抽出するため）
-    pattern = r'# Test no\s*:(.*?)(?=# Test no|$)'
+    # ファイルの内容を確認（デバッグ用）
+    print(f"ファイルサイズ: {len(content)} バイト")
+    print(f"ファイルの先頭500文字: {content[:500]}")
     
-    # フラグsを使用して.が改行にもマッチするようにする
-    matches = re.finditer(pattern, content, re.DOTALL)
+    # より柔軟な正規表現パターンを定義
+    # ファイル全体を1つのブロックとして扱い、各フィールドを個別に抽出するアプローチに変更
+    test_blocks = []
     
-    for match in matches:
-        test_block = match.group(0)
+    # Test no が存在する行を検索
+    test_no_positions = [m.start() for m in re.finditer(r'(?m)^#\s*Test no\s*:', content)]
+    print(f"見つかった 'Test no' マーカーの数: {len(test_no_positions)}")
+    
+    if not test_no_positions:
+        # Test no が見つからない場合、ファイル全体を1つのブロックとして処理
+        test_blocks = [content]
+        print("'Test no' マーカーが見つからないため、ファイル全体を1ブロックとして処理します")
+    else:
+        # 各 Test no の位置から次の Test no の位置までをブロックとして切り出す
+        for i in range(len(test_no_positions)):
+            start_pos = test_no_positions[i]
+            end_pos = test_no_positions[i+1] if i < len(test_no_positions) - 1 else len(content)
+            test_blocks.append(content[start_pos:end_pos])
+    
+    print(f"処理するブロック数: {len(test_blocks)}")
+    
+    for test_block in test_blocks:
         
         # 各項目を抽出（フィールド名を指定）
         test_no = extract_field(test_block, "Test no")
@@ -77,26 +95,31 @@ def extract_field(text, field_name):
     Returns:
         str: 抽出された値（整形済み）
     """
-    # 各フィールドの開始パターン
+    # 各フィールドの開始パターン (より柔軟なパターンに)
     field_patterns = [
-        "# Test no", "# Item1", "# Item2", "# Test Sequence", 
-        "# Input Parameter", "# Test Purpose"
+        r"#\s*Test no\s*:", r"#\s*Item1\s*:", r"#\s*Item2\s*:", 
+        r"#\s*Test Sequence\s*:", r"#\s*Input Parameter\s*:", r"#\s*Test Purpose\s*:"
     ]
     
-    # 指定されたフィールドの開始位置を検索
-    field_pattern = f"# {field_name}"
-    start_match = re.search(f"{field_pattern}\\s*:", text)
+    # 指定されたフィールドのパターンを作成 (より柔軟なマッチングのため)
+    field_pattern = rf"#\s*{field_name}\s*:"
+    
+    # まず通常のケースでマッチを試みる
+    start_match = re.search(field_pattern, text, re.IGNORECASE)
     
     if not start_match:
+        print(f"フィールド '{field_name}' が見つかりませんでした")
         return ""
     
     start_pos = start_match.end()
     
     # 次のフィールドの開始位置を検索
     end_pos = len(text)
+    
+    # 全てのフィールドパターンに対して次の出現位置を探す
     for pattern in field_patterns:
-        # 指定されたフィールド以降で次のフィールドを検索
-        next_field_match = re.search(f"(?m)^{pattern}\\s*:", text[start_pos:])
+        # より柔軟な検索パターン (行頭にこだわらない)
+        next_field_match = re.search(pattern, text[start_pos:], re.IGNORECASE)
         if next_field_match:
             next_field_pos = start_pos + next_field_match.start()
             if next_field_pos < end_pos:
@@ -110,13 +133,54 @@ def extract_field(text, field_name):
     processed_lines = []
     
     for line in lines:
-        # 行頭の '#' と空白を除去
-        line = re.sub(r'^#\s*', '', line.strip())
+        # 行頭の '#' と空白を除去 (より柔軟に)
+        line = re.sub(r'^\s*#\s*(:)?\s*', '', line.strip())
         if line:  # 空行でなければ追加
             processed_lines.append(line)
     
+    result = ' '.join(processed_lines)
+    if result:
+        print(f"フィールド '{field_name}' の抽出結果: '{result[:50]}...'")
+    else:
+        print(f"フィールド '{field_name}' の内容が空です")
+        
     # 処理した行を結合
-    return ' '.join(processed_lines)
+    return result
+
+def scan_for_fields(file_path):
+    """
+    ファイル内のすべてのフィールドをスキャンして表示する（デバッグ用）
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        try:
+            with open(file_path, 'r', encoding='shift-jis') as file:
+                content = file.read()
+        except UnicodeDecodeError:
+            print("ファイルのエンコーディングを特定できませんでした")
+            return
+    
+    # 一般的なフィールドパターンを探す
+    field_patterns = [
+        r'#\s*Test no\s*:',
+        r'#\s*Item1\s*:',
+        r'#\s*Item2\s*:',
+        r'#\s*Test Sequence\s*:',
+        r'#\s*Input Parameter\s*:',
+        r'#\s*Test Purpose\s*:'
+    ]
+    
+    print("\n=== ファイル内のフィールド検出結果 ===")
+    for pattern in field_patterns:
+        matches = list(re.finditer(pattern, content))
+        print(f"{pattern}: {len(matches)}個見つかりました")
+        if matches and len(matches) <= 3:  # サンプル表示は3つまで
+            for i, m in enumerate(matches):
+                context_start = max(0, m.start() - 20)
+                context_end = min(len(content), m.end() + 40)
+                print(f"  サンプル{i+1}: ...{content[context_start:context_end]}...")
 
 if __name__ == "__main__":
     # コマンドライン引数からファイルパスを取得
@@ -129,6 +193,11 @@ if __name__ == "__main__":
             base_name = os.path.splitext(os.path.basename(perl_file_path))[0]
             output_csv_path = f"{base_name}_test_info.csv"
         
+        # デバッグ情報を表示
+        print(f"ファイル '{perl_file_path}' を処理します")
+        scan_for_fields(perl_file_path)
+        
+        # 本処理を実行
         extract_test_info(perl_file_path, output_csv_path)
     else:
         print("使用方法: python script.py <入力Perlファイル> [出力CSVファイル]")
