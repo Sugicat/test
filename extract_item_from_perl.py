@@ -5,86 +5,6 @@ import sys
 import glob
 from pathlib import Path
 
-def extract_test_info(perl_file_path, output_csv_path):
-    """
-    Perlファイルから特定のテスト情報を抽出してCSVファイルに出力する関数
-    
-    Args:
-        perl_file_path (str): 入力するPerlファイルのパス
-        output_csv_path (str): 出力するCSVファイルのパス
-    """
-    # 結果を格納するリスト
-    test_info_list = []
-    
-    # ファイルを読み込む
-    try:
-        with open(perl_file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
-    except UnicodeDecodeError:
-        # UTF-8でデコードできない場合は他のエンコーディングを試す
-        with open(perl_file_path, 'r', encoding='shift-jis') as file:
-            content = file.read()
-    
-    # ファイルの内容を確認（デバッグ用）
-    print(f"ファイルサイズ: {len(content)} バイト")
-    print(f"ファイルの先頭500文字: {content[:500]}")
-    
-    # より柔軟な正規表現パターンを定義
-    # ファイル全体を1つのブロックとして扱い、各フィールドを個別に抽出するアプローチに変更
-    test_blocks = []
-    
-    # Test no が存在する行を検索
-    test_no_positions = [m.start() for m in re.finditer(r'(?m)^#\s*Test no\s*:', content)]
-    print(f"見つかった 'Test no' マーカーの数: {len(test_no_positions)}")
-    
-    if not test_no_positions:
-        # Test no が見つからない場合、ファイル全体を1つのブロックとして処理
-        test_blocks = [content]
-        print("'Test no' マーカーが見つからないため、ファイル全体を1ブロックとして処理します")
-    else:
-        # 各 Test no の位置から次の Test no の位置までをブロックとして切り出す
-        for i in range(len(test_no_positions)):
-            start_pos = test_no_positions[i]
-            end_pos = test_no_positions[i+1] if i < len(test_no_positions) - 1 else len(content)
-            test_blocks.append(content[start_pos:end_pos])
-    
-    print(f"処理するブロック数: {len(test_blocks)}")
-    
-    for test_block in test_blocks:
-        
-        # 各項目を抽出（フィールド名を指定）
-        test_no = extract_field(test_block, "Test no")
-        item1 = extract_field(test_block, "Item1")
-        item2 = extract_field(test_block, "Item2")
-        test_sequence = extract_field(test_block, "Test Sequence")
-        input_parameter = extract_field(test_block, "Input Parameter")
-        test_purpose = extract_field(test_block, "Test Purpose")
-        
-        # 抽出した情報を辞書としてリストに追加
-        test_info = {
-            'Test No': test_no,
-            'Item1': item1,
-            'Item2': item2,
-            'Test Sequence': test_sequence,
-            'Input Parameter': input_parameter,
-            'Test Purpose': test_purpose
-        }
-        
-        test_info_list.append(test_info)
-    
-    # CSVファイルに書き出し
-    if test_info_list:
-        fieldnames = ['Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
-        
-        with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(test_info_list)
-        
-        print(f"抽出完了: {len(test_info_list)}件のテスト情報を'{output_csv_path}'に保存しました。")
-    else:
-        print("テスト情報が見つかりませんでした。")
-
 def extract_field(text, field_name, debug=True):
     """
     テキストから特定のフィールドを抽出する補助関数
@@ -165,6 +85,147 @@ def extract_field(text, field_name, debug=True):
     # 処理した行を結合
     return result
 
+def extract_test_info_from_file(file_path, debug=True):
+    """
+    単一のファイルからテスト情報を抽出する関数
+    
+    Args:
+        file_path (str): 入力ファイルのパス
+        debug (bool): デバッグ出力を表示するかどうか
+    
+    Returns:
+        list: 抽出されたテスト情報のリスト
+    """
+    # 結果を格納するリスト
+    test_info_list = []
+    
+    # ファイルを読み込む
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        try:
+            # UTF-8でデコードできない場合は他のエンコーディングを試す
+            with open(file_path, 'r', encoding='shift-jis') as file:
+                content = file.read()
+        except UnicodeDecodeError:
+            print(f"ファイル '{file_path}' のエンコーディングを特定できませんでした")
+            return []
+    
+    if debug:
+        # ファイルの内容を確認（デバッグ用）
+        print(f"ファイルサイズ: {len(content)} バイト")
+        print(f"ファイルの先頭500文字: {content[:500].replace('\n', '\\n')}")
+    
+    # # ******** パターンで囲まれた部分を抽出
+    delimiter_pattern = r'#\s*\*{8,}'  # # に続いて空白（任意）、そして8個以上の * がある行
+    
+    # デリミタ（区切り）パターンの位置を見つける
+    delimiter_positions = [m.start() for m in re.finditer(delimiter_pattern, content)]
+    if debug:
+        print(f"見つかった区切りパターンの数: {len(delimiter_positions)}")
+    
+    if len(delimiter_positions) < 2:
+        print(f"ファイル '{file_path}' に十分な区切りパターンがありません。")
+        return []
+    
+    # 区切りパターンのペアで囲まれた部分を抽出
+    test_blocks = []
+    for i in range(0, len(delimiter_positions) - 1, 2):
+        start_pos = delimiter_positions[i]
+        end_pos = delimiter_positions[i + 1]
+        
+        # 開始区切りパターンの行末までスキップ
+        line_end = content.find('\n', start_pos)
+        if line_end > 0:
+            start_pos = line_end + 1
+        
+        # 終了区切りパターンの行頭まで
+        block = content[start_pos:end_pos].strip()
+        test_blocks.append(block)
+    
+    if debug:
+        print(f"抽出されたブロック数: {len(test_blocks)}")
+        if test_blocks:
+            print(f"最初のブロックのサンプル（先頭100文字）: {test_blocks[0][:100].replace('\n', '\\n')}")
+    
+    # 各ブロックからテスト情報を抽出
+    for block in test_blocks:
+        # 各項目を抽出
+        test_info = {}
+        
+        # 必要なフィールドのリスト
+        fields = [
+            ("Test no", "Test No"),
+            ("Item1", "Item1"),
+            ("Item2", "Item2"),
+            ("Item3", "Item3"),
+            ("Test Sequence", "Test Sequence"),
+            ("Input Parameter", "Input Parameter"),
+            ("Test Purpose", "Test Purpose")
+        ]
+        
+        # 各フィールドを抽出
+        for field_name, csv_column in fields:
+            value = extract_field(block, field_name, debug=debug)
+            test_info[csv_column] = value
+        
+        # 少なくとも1つのフィールドが存在する場合のみ追加
+        if any(test_info.values()):
+            test_info_list.append(test_info)
+    
+    print(f"ファイル '{file_path}' から {len(test_info_list)} 件のテスト情報を抽出しました。")
+    return test_info_list
+
+def process_directory(directory_path, output_csv_path):
+    """
+    指定されたディレクトリ内のすべての .vec ファイルを処理し、
+    抽出した情報を1つのCSVファイルにまとめる
+    
+    Args:
+        directory_path (str): 処理するディレクトリのパス
+        output_csv_path (str): 出力するCSVファイルのパス
+    """
+    # 結果を格納するリスト
+    all_test_info = []
+    
+    # .vec ファイルの一覧を取得
+    vec_files = list(Path(directory_path).glob('**/*.vec'))
+    
+    if not vec_files:
+        print(f"ディレクトリ '{directory_path}' 内に .vec ファイルが見つかりませんでした。")
+        return
+    
+    print(f"合計 {len(vec_files)} 個の .vec ファイルが見つかりました。")
+    
+    # 各ファイルを処理
+    for i, file_path in enumerate(vec_files):
+        print(f"\n処理中 ({i+1}/{len(vec_files)}): {file_path}")
+        
+        # ファイルからテスト情報を抽出 (詳細なデバッグ出力をオフに)
+        test_info_list = extract_test_info_from_file(str(file_path), debug=False)
+        
+        # ファイル名情報を追加
+        if test_info_list:
+            for info in test_info_list:
+                info['File Name'] = file_path.name
+            
+            # 全体のリストに追加
+            all_test_info.extend(test_info_list)
+    
+    # CSVファイルに書き出し
+    if all_test_info:
+        fieldnames = ['File Name', 'Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
+        
+        with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(all_test_info)
+        
+        print(f"\n抽出完了: 合計 {len(all_test_info)} 件のテスト情報を '{output_csv_path}' に保存しました。")
+    else:
+        print("\nテスト情報が見つかりませんでした。")
+
 def scan_for_fields(file_path):
     """
     ファイル内のすべてのフィールドをスキャンして表示する（デバッグ用）
@@ -198,6 +259,7 @@ def scan_for_fields(file_path):
         r'#\s*Test no\s*:',
         r'#\s*Item1\s*:',
         r'#\s*Item2\s*:',
+        r'#\s*Item3\s*:',
         r'#\s*Test Sequence\s*:',
         r'#\s*Input Parameter\s*:',
         r'#\s*Test Purpose\s*:'
@@ -246,7 +308,10 @@ if __name__ == "__main__":
             print(f"警告: 入力ファイル '{input_path}' は .vec 拡張子ではありません。")
         
         print(f"ファイル '{input_path}' を処理中...")
-        # 旧関数名を新関数に置き換え
+        # デバッグ情報を表示
+        scan_for_fields(input_path)
+        
+        # ファイルを処理
         test_info_list = extract_test_info_from_file(input_path)
         
         # CSVファイルに書き出し
