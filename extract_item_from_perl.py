@@ -2,6 +2,8 @@ import re
 import csv
 import os
 import sys
+import glob
+from pathlib import Path
 
 def extract_test_info(perl_file_path, output_csv_path):
     """
@@ -83,7 +85,7 @@ def extract_test_info(perl_file_path, output_csv_path):
     else:
         print("テスト情報が見つかりませんでした。")
 
-def extract_field(text, field_name):
+def extract_field(text, field_name, debug=True):
     """
     テキストから特定のフィールドを抽出する補助関数
     複数行にわたるフィールドにも対応
@@ -92,6 +94,7 @@ def extract_field(text, field_name):
     Args:
         text (str): 検索対象のテキスト
         field_name (str): 抽出するフィールド名（例: "Test no"）
+        debug (bool): デバッグ出力を表示するかどうか
     
     Returns:
         str: 抽出された値（整形済み）
@@ -112,7 +115,8 @@ def extract_field(text, field_name):
     start_match = re.search(field_pattern, text, re.IGNORECASE)
     
     if not start_match:
-        print(f"フィールド '{field_name}' が見つかりませんでした")
+        if debug:
+            print(f"フィールド '{field_name}' が見つかりませんでした")
         return ""
     
     start_pos = start_match.end()
@@ -135,7 +139,8 @@ def extract_field(text, field_name):
         delimiter_pos = start_pos + delimiter_match.start()
         if delimiter_pos < end_pos:
             end_pos = delimiter_pos
-            print(f"フィールド '{field_name}' の終了を区切りパターン '# ******' で検出しました")
+            if debug:
+                print(f"フィールド '{field_name}' の終了を区切りパターン '# ******' で検出しました")
     
     # フィールドの内容を取得
     field_content = text[start_pos:end_pos].strip()
@@ -151,10 +156,11 @@ def extract_field(text, field_name):
             processed_lines.append(line)
     
     result = ' '.join(processed_lines)
-    if result:
-        print(f"フィールド '{field_name}' の抽出結果: '{result[:50]}...'")
-    else:
-        print(f"フィールド '{field_name}' の内容が空です")
+    if debug:
+        if result:
+            print(f"フィールド '{field_name}' の抽出結果: '{result[:50]}...'")
+        else:
+            print(f"フィールド '{field_name}' の内容が空です")
         
     # 処理した行を結合
     return result
@@ -209,21 +215,49 @@ def scan_for_fields(file_path):
                 print(f"  サンプル{i+1}: ...{context}...")
 
 if __name__ == "__main__":
-    # コマンドライン引数からファイルパスを取得
-    if len(sys.argv) > 1:
-        perl_file_path = sys.argv[1]
-        # 出力ファイル名が指定されていない場合は、入力ファイル名をベースにする
-        if len(sys.argv) > 2:
-            output_csv_path = sys.argv[2]
-        else:
-            base_name = os.path.splitext(os.path.basename(perl_file_path))[0]
-            output_csv_path = f"{base_name}_test_info.csv"
-        
-        # デバッグ情報を表示
-        print(f"ファイル '{perl_file_path}' を処理します")
-        scan_for_fields(perl_file_path)
-        
-        # 本処理を実行
-        extract_test_info(perl_file_path, output_csv_path)
+    # コマンドライン引数の処理
+    if len(sys.argv) < 2:
+        print("使用方法: python script.py <入力パス> [出力CSVファイル]")
+        print("  <入力パス> : 単一の.vecファイルまたはディレクトリのパス")
+        print("  [出力CSVファイル] : 省略可。出力CSVファイルのパス")
+        sys.exit(1)
+    
+    input_path = sys.argv[1]
+    
+    # 出力ファイル名の設定
+    if len(sys.argv) > 2:
+        output_csv_path = sys.argv[2]
     else:
-        print("使用方法: python script.py <入力Perlファイル> [出力CSVファイル]")
+        if os.path.isdir(input_path):
+            # ディレクトリの場合、ディレクトリ名をベースに出力ファイル名を設定
+            dir_name = os.path.basename(os.path.normpath(input_path))
+            output_csv_path = f"{dir_name}_test_info.csv"
+        else:
+            # ファイルの場合、ファイル名をベースに出力ファイル名を設定
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            output_csv_path = f"{base_name}_test_info.csv"
+    
+    # 入力パスがディレクトリかファイルかによって処理を分岐
+    if os.path.isdir(input_path):
+        print(f"ディレクトリ '{input_path}' を処理中...")
+        process_directory(input_path, output_csv_path)
+    else:
+        if not input_path.lower().endswith('.vec'):
+            print(f"警告: 入力ファイル '{input_path}' は .vec 拡張子ではありません。")
+        
+        print(f"ファイル '{input_path}' を処理中...")
+        # 旧関数名を新関数に置き換え
+        test_info_list = extract_test_info_from_file(input_path)
+        
+        # CSVファイルに書き出し
+        if test_info_list:
+            fieldnames = ['Test No', 'Item1', 'Item2', 'Item3', 'Test Sequence', 'Input Parameter', 'Test Purpose']
+            
+            with open(output_csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(test_info_list)
+            
+            print(f"抽出完了: {len(test_info_list)}件のテスト情報を'{output_csv_path}'に保存しました。")
+        else:
+            print("テスト情報が見つかりませんでした。")
