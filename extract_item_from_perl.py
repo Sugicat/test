@@ -162,6 +162,19 @@ def scan_for_fields(file_path):
             print("ファイルのエンコーディングを特定できませんでした")
             return
     
+    # 区切りパターンを探す
+    delimiter_pattern = r'#\s*\*{8,}'
+    delimiter_matches = list(re.finditer(delimiter_pattern, content))
+    print(f"\n=== 区切りパターン '# ********' の検出結果 ===")
+    print(f"合計: {len(delimiter_matches)}個見つかりました")
+    if delimiter_matches:
+        for i, m in enumerate(delimiter_matches[:3]):  # 最初の3つのみ表示
+            line_start = content.rfind('\n', 0, m.start()) + 1
+            line_end = content.find('\n', m.start())
+            if line_end == -1:
+                line_end = len(content)
+            print(f"  サンプル{i+1}: '{content[line_start:line_end]}'")
+    
     # 一般的なフィールドパターンを探す
     field_patterns = [
         r'#\s*Test no\s*:',
@@ -180,7 +193,8 @@ def scan_for_fields(file_path):
             for i, m in enumerate(matches):
                 context_start = max(0, m.start() - 20)
                 context_end = min(len(content), m.end() + 40)
-                print(f"  サンプル{i+1}: ...{content[context_start:context_end]}...")
+                context = content[context_start:context_end].replace('\n', '\\n')
+                print(f"  サンプル{i+1}: ...{context}...")
 
 if __name__ == "__main__":
     # コマンドライン引数からファイルパスを取得
