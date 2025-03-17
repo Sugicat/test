@@ -1,119 +1,78 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use JSON;
 use Data::Dumper;
 use B::Deparse;
-use Scalar::Util qw(reftype blessed);
+use Scalar::Util qw(reftype refaddr blessed);
 
 # JSONエンコード用の設定
 local $Data::Dumper::Indent = 1;
 local $Data::Dumper::Sortkeys = 1;
 local $Data::Dumper::Terse = 1;
 
-# コマンドライン引数からモジュール名を取得
-my $module_name = shift @ARGV or die "Usage: $0 ModuleName\n";
+# コマンドライン引数からファイルパスを取得
+my $file_path = shift @ARGV or die "Usage: $0 /path/to/perl/file.pl\n";
+my $package_name = 'main'; # デフォルトのパッケージ名
 
-# モジュールの読み込みと変数の取得
-my %result;
-eval "require $module_name";
-if ($@) {
-    die "モジュール '$module_name' の読み込みに失敗しました: $@\n";
+# ファイルが存在するか確認
+unless (-f $file_path) {
+    die "ファイル '$file_path' が見つかりません\n";
 }
 
-# モジュールのファイルパスを取得 (Module::Infoの代わり)
-my $filename = $INC{module_to_path($module_name)};
+# ファイルを読み込む（requireではなくdoを使用）
+{
+    # ファイル内の変数を正しく取得するため、暫定的にstrict/warningsを無効化
+    no strict;
+    no warnings;
+    
+    # ファイルを実行（ファイル内の変数がグローバルスコープに展開される）
+    do $file_path;
+    if ($@) {
+        warn "ファイルの実行中にエラーが発生しました: $@\n";
+    }
+}
 
-$result{module} = {
-    name => $module_name,
-    file => $filename,
+# 結果格納用ハッシュ
+my %result;
+
+$result{file} = {
+    path => $file_path,
+    package => $package_name,
 };
 
 # シンボルテーブルを取得
 my $package_symtab = do {
     no strict 'refs';
-    \%{"${module_name}::"};
+    \%{"${package_name}::"};
 };
 
-# 変数、サブルーチン、定数を収集
-$result{variables} = collect_variables($package_symtab, $module_name);
-$result{subroutines} = collect_subroutines($package_symtab, $module_name);
-$result{dependencies} = collect_dependencies($module_name);
+# 変数とサブルーチンを収集
+$result{variables} = collect_variables($package_symtab, $package_name);
+$result{subroutines} = collect_subroutines($package_symtab, $package_name);
+$result{dependencies} = collect_dependencies();
 
-# 結果をJSON形式の代わりにData::Dumperで出力
-print to_json(\%result);
-
-# モジュール名からパス名への変換
-sub module_to_path {
-    my ($module) = @_;
-    (my $path = "$module.pm") =~ s{::}{/}g;
-    return $path;
-}
-
-# 簡易的なJSONエンコード (JSON.pmを使用せず)
-sub to_json {
-    my ($data) = @_;
-    my $json = simple_json_encode($data);
-    return $json;
-}
-
-# 簡易的なJSONエンコーダ
-sub simple_json_encode {
-    my ($data) = @_;
-    
-    if (!defined $data) {
-        return 'null';
-    }
-    elsif (!ref $data) {
-        # 数値かどうか確認
-        if ($data =~ /^-?\d+(\.\d+)?$/) {
-            return $data;
-        }
-        else {
-            # 文字列エスケープ
-            $data =~ s/\\/\\\\/g;
-            $data =~ s/"/\\"/g;
-            $data =~ s/\n/\\n/g;
-            $data =~ s/\r/\\r/g;
-            $data =~ s/\t/\\t/g;
-            return qq("$data");
-        }
-    }
-    elsif (ref $data eq 'ARRAY') {
-        my @items = map { simple_json_encode($_) } @$data;
-        return '[' . join(',', @items) . ']';
-    }
-    elsif (ref $data eq 'HASH') {
-        my @items;
-        foreach my $key (sort keys %$data) {
-            my $value = simple_json_encode($data->{$key});
-            $key =~ s/\\/\\\\/g;
-            $key =~ s/"/\\"/g;
-            push @items, qq("$key":$value);
-        }
-        return '{' . join(',', @items) . '}';
-    }
-    else {
-        # その他の参照型 (ここでは単純に文字列化)
-        return qq("$data");
-    }
-}
+# 結果をJSON形式で出力
+print encode_json(\%result);
 
 # 変数を収集する関数
 sub collect_variables {
     my ($symtab, $package) = @_;
     my %vars;
     
-    foreach my $name (keys %$symtab) {
+    foreach my $name (sort keys %$symtab) {
         next if $name =~ /::$/;  # サブパッケージをスキップ
+        next if $name =~ /^_</;  # ファイルハンドルをスキップ
         
         my $full_name = "${package}::${name}";
         
         # スカラー変数
         if (defined *{$symtab->{$name}}{SCALAR} && *{$symtab->{$name}}{SCALAR} != \undef) {
             no strict 'refs';
+            my $value = ${*{$full_name}};
             $vars{"$name (scalar)"} = {
                 type => 'SCALAR',
-                value => scalar_to_string(${*{$full_name}}),
+                value => scalar_to_string($value),
             };
         }
         
@@ -148,8 +107,9 @@ sub collect_subroutines {
     my ($symtab, $package) = @_;
     my %subs;
     
-    foreach my $name (keys %$symtab) {
+    foreach my $name (sort keys %$symtab) {
         next if $name =~ /::$/;  # サブパッケージをスキップ
+        next if $name =~ /^_</;  # ファイルハンドルをスキップ
         
         if (defined *{$symtab->{$name}}{CODE}) {
             my $full_name = "${package}::${name}";
@@ -170,16 +130,12 @@ sub collect_subroutines {
 
 # モジュールの依存関係を収集する関数
 sub collect_dependencies {
-    my ($module) = @_;
     my @deps;
     
     # %INCからロードされたモジュールを取得
-    foreach my $inc_key (keys %INC) {
-        my $module_path = $inc_key;
-        $module_path =~ s/\//::/g;
-        $module_path =~ s/\.pm$//;
+    foreach my $inc_key (sort keys %INC) {
         push @deps, {
-            name => $module_path,
+            name => $inc_key,
             file => $INC{$inc_key},
         };
     }
