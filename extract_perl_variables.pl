@@ -60,43 +60,74 @@ sub collect_variables {
     my ($symtab, $package) = @_;
     my %vars;
     
+    # 一時保存用のハッシュ（変数タイプごと）
+    my %temp_vars = (
+        'ARRAY' => {},
+        'HASH' => {},
+        'SCALAR' => {},
+    );
+    
+    # まず全ての変数を種類ごとに収集
     foreach my $name (sort keys %$symtab) {
         next if $name =~ /::$/;  # サブパッケージをスキップ
         next if $name =~ /^_</;  # ファイルハンドルをスキップ
         
         my $full_name = "${package}::${name}";
         
-        # スカラー変数
-        if (defined *{$symtab->{$name}}{SCALAR} && *{$symtab->{$name}}{SCALAR} != \undef) {
-            no strict 'refs';
-            my $value = ${*{$full_name}};
-            $vars{"$name (scalar)"} = {
-                type => 'SCALAR',
-                value => scalar_to_string($value),
-            };
-        }
-        
-        # 配列変数
+        # 配列変数（優先度高）
         if (defined *{$symtab->{$name}}{ARRAY}) {
             no strict 'refs';
             my @array = @{*{$full_name}};
-            $vars{"$name (array)"} = {
+            $temp_vars{'ARRAY'}{$name} = {
                 type => 'ARRAY',
                 value => \@array,
                 size => scalar(@array),
             };
         }
         
-        # ハッシュ変数
+        # ハッシュ変数（優先度中）
         if (defined *{$symtab->{$name}}{HASH}) {
             no strict 'refs';
             my %hash = %{*{$full_name}};
-            $vars{"$name (hash)"} = {
+            $temp_vars{'HASH'}{$name} = {
                 type => 'HASH',
                 value => \%hash,
                 keys => [sort keys %hash],
             };
         }
+        
+        # スカラー変数（優先度低）
+        if (defined *{$symtab->{$name}}{SCALAR} && *{$symtab->{$name}}{SCALAR} != \undef) {
+            no strict 'refs';
+            my $value = ${*{$full_name}};
+            $temp_vars{'SCALAR'}{$name} = {
+                type => 'SCALAR',
+                value => scalar_to_string($value),
+            };
+        }
+    }
+    
+    # 収集した変数を優先度順（ARRAY > HASH > SCALAR）で結果に追加
+    # 既に同名の変数が追加されている場合はスキップ
+    my %processed_names;
+    
+    # 配列を最優先で追加
+    foreach my $name (sort keys %{$temp_vars{'ARRAY'}}) {
+        $vars{"$name (array)"} = $temp_vars{'ARRAY'}{$name};
+        $processed_names{$name} = 1;
+    }
+    
+    # 次にハッシュを追加（同名の配列がなければ）
+    foreach my $name (sort keys %{$temp_vars{'HASH'}}) {
+        next if $processed_names{$name};
+        $vars{"$name (hash)"} = $temp_vars{'HASH'}{$name};
+        $processed_names{$name} = 1;
+    }
+    
+    # 最後にスカラーを追加（同名の配列もハッシュもなければ）
+    foreach my $name (sort keys %{$temp_vars{'SCALAR'}}) {
+        next if $processed_names{$name};
+        $vars{"$name (scalar)"} = $temp_vars{'SCALAR'}{$name};
     }
     
     return \%vars;
